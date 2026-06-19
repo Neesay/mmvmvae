@@ -3,6 +3,7 @@ import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 import torch
+from pytorch_lightning.profilers import PyTorchProfiler
 from omegaconf import OmegaConf
 import hydra
 from hydra.core.config_store import ConfigStore
@@ -54,6 +55,23 @@ def run_experiment(cfg: MyClfConfig):
         entity=cfg.log.wandb_entity,
         save_dir=cfg.log.dir_logs,
     )
+    
+    profiler = None
+    if getattr(cfg.log, "profile", False):
+        profiler = PyTorchProfiler(
+            dirpath=os.path.join(cfg.log.dir_logs, "profiler"),
+            filename="profiler_clf_logs",
+            export_to_chrome=True,
+            record_shapes=True,
+            profile_memory=True,
+            with_stack=True,
+            schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=2),
+            activities=[
+                torch.profiler.ProfilerActivity.CPU,
+                torch.profiler.ProfilerActivity.CUDA,
+            ]
+        )
+
     trainer = pl.Trainer(
         max_epochs=cfg.model.epochs,
         devices=1,
@@ -62,6 +80,7 @@ def run_experiment(cfg: MyClfConfig):
         check_val_every_n_epoch=1,
         deterministic=True,
         callbacks=[checkpoint_callback],
+        profiler=profiler,
     )
 
     trainer.logger.watch(model, log="all")

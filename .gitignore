@@ -5,6 +5,10 @@ runs/*
 data/celeba_data.zip  
 data/CelebA.tar.gz  
 data/data/*  
+data/CelebA
+data/MMNIST
+data/scMNC
+trained_classifiers
 # download_data.pbs  
 data/MMNIST/*  
 data/MMNIST.tar.gz  
