@@ -12,6 +12,7 @@ class ModelConfig:
     latent_dim: int = 256
     hidden_dim: int = 512 # for encoders/decoders hidden layers for scMNC
     early_stop: bool = False
+    compile: bool = True
 
     # loss hyperparameters
     beta_annealing: bool = True # True

@@ -53,9 +53,8 @@ class scDecoder(nn.Module):
             nn.LeakyReLU(),
             nn.Linear(2*self.output_dim, self.output_dim),
         )
+        self.register_buffer('scale', torch.tensor(0.75))
 
     def forward(self, z):
         x_hat = self.decoder(z)
-        return x_hat, torch.tensor(0.75).to(
-            z.device
-        )
+        return x_hat, self.scale

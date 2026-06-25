@@ -97,23 +97,30 @@ class MVMixedPriorVAE(MVVAE):
         else:
             beta_weight = self.cfg.model.final_beta_value
         self.log("beta annealing", beta_weight)
-        klds = []
-        for _, key in enumerate(self.modality_names):
-            dist_m = dists_out[key]
-            for _, key_tilde in enumerate(self.modality_names):
-                dist_m_tilde = priors[key_tilde]
-                kld_m_m_tilde = self.kl_div_z_two_dists(dist_m, dist_m_tilde)
-                # KL(q_m | q_m_tilde) * (1-alpha)
-                klds.append(kld_m_m_tilde.unsqueeze(1) * (1.0 - alpha_weight))
-            # add N(0,1) as a component
-            kld_m = self.kl_div_z(dist_m)
-            # KL(q_m | N(0,1)) * alpha * M
-            klds.append(kld_m.unsqueeze(1) * alpha_weight * self.cfg.dataset.num_views)
-        # SUM_{m}:( alpha * KL(q_m|N(0,1)) + (1-alpha)/M * SUM_{m_tilde}:KL(q_m|q_m_tilde) )
-        # when alpha = 0: mixedprior
-        # when alpha = 1: unimodal
-        # when alpha = 1/(M+1): mixedpriorstdnorm
-        klds_sum = torch.cat(klds, dim=1).sum(dim=1) / self.cfg.dataset.num_views
+        # kl divergence of latent distribution
+        all_mus = torch.stack([dists_out[k][0] for k in self.modality_names], dim=1) # (B, M, D)
+        all_lvs = torch.stack([dists_out[k][1] for k in self.modality_names], dim=1) # (B, M, D)
+        num_views = self.cfg.dataset.num_views
+
+        # KL(q_m | N(0,1))
+        klds_norm = -0.5 * torch.sum(1 - all_lvs.exp() - all_mus.pow(2) + all_lvs, dim=-1) # (B, M)
+        klds_norm_term = klds_norm.sum(dim=1) * alpha_weight * num_views
+
+        # KL(q_m | q_m_tilde)
+        # Using broadcasting: mu0 is (B, M, 1, D), mu1 is (B, 1, M, D)
+        mu0 = all_mus.unsqueeze(2)
+        lv0 = all_lvs.unsqueeze(2)
+        mu1 = all_mus.unsqueeze(1)
+        lv1 = all_lvs.unsqueeze(1)
+        
+        klds_pairs = -0.5 * torch.sum(
+            1 - lv0.exp() / lv1.exp() - (mu0 - mu1).pow(2) / lv1.exp() + lv0 - lv1,
+            dim=-1
+        ) # (B, M, M)
+        
+        klds_pairs_term = klds_pairs.sum(dim=(1, 2)) * (1.0 - alpha_weight)
+        
+        klds_sum = (klds_norm_term + klds_pairs_term) / num_views
 
         ## compute reconstruction loss/ conditional log-likelihood out data
         ## given latents

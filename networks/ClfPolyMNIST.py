@@ -37,7 +37,7 @@ class ClfImgPolyMNIST(nn.Module):
         batch_size = x.size(0)
         out = self.conv_img(x)
         out = self.resnet(out)
-        out = out.view(batch_size, self.nf0*self.s0*self.s0)
-        out = self.fc(actvn(out))
+        out = out.reshape(batch_size, self.nf0*self.s0*self.s0)
+        return self.fc(actvn(out))
         # return F.log_softmax(out, dim=-1)
         return out

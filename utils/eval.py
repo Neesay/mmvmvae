@@ -6,6 +6,9 @@ from sklearn.metrics import accuracy_score
 from sklearn.metrics import average_precision_score
 
 import torch
+import omegaconf.dictconfig
+
+torch.serialization.add_safe_globals([omegaconf.dictconfig.DictConfig])
 
 from clfs.polymnist_clf import ClfPolyMNIST
 from clfs.celeba_clf import ClfCelebA
@@ -106,7 +109,7 @@ def load_modality_clfs_PM(cfg):
     fp_clf = os.path.join(
         cfg.dataset.dir_clfs_base, cfg.dataset.suffix_clfs, "last.ckpt"
     )
-    model = ClfPolyMNIST.load_from_checkpoint(fp_clf)
+    model = ClfPolyMNIST.load_from_checkpoint(fp_clf, weights_only=False)
     return model
 
 

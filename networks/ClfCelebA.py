@@ -14,7 +14,7 @@ class ClfImg(nn.Module):
     def forward(self, x_img):
         h = self.feature_extractor(x_img)
         h = self.dropout(h)
-        h = h.view(h.size(0), -1)
+        h = h.reshape(h.size(0), -1)
         h = self.linear(h)
         out = self.sigmoid(h)
         return out

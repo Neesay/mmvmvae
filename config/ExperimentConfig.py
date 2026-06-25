@@ -30,6 +30,9 @@ class LogConfig:
     # debug level wandb
     debug: bool = False
 
+    # profiler
+    profile: bool = False
+
 
 @dataclass
 class EvalConfig:

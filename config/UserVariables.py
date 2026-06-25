@@ -1,2 +1,3 @@
-folder_path = "/rds/general/user/eso18/home/mmvmvae/"
-wandb_entity = "eso18-imperial-college-london"
+import os
+folder_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + "/"
+wandb_entity = ""

@@ -188,6 +188,6 @@ class LinearFeatureCompressor(nn.Module):
         self.logvar = nn.Linear(in_channels, out_channels, bias=False)
 
     def forward(self, feats):
-        feats = feats.view(feats.size(0), -1)
+        feats = feats.reshape(feats.size(0), -1)
         mu, logvar = self.mu(feats), self.logvar(feats)
         return mu, logvar

@@ -11,7 +11,7 @@ def actvn(x):
 
 class Flatten(torch.nn.Module):
     def forward(self, x):
-        return x.view(x.size(0), -1)
+        return x.reshape(x.size(0), -1)
 
 
 class Unflatten(torch.nn.Module):
@@ -20,7 +20,7 @@ class Unflatten(torch.nn.Module):
         self.ndims = ndims
 
     def forward(self, x):
-        return x.view(x.size(0), *self.ndims)
+        return x.reshape(x.size(0), *self.ndims)
 
 
 class Encoder(nn.Module):
@@ -68,6 +68,7 @@ class Decoder(nn.Module):
     def __init__(self, latent_dim):
         super(Decoder, self).__init__()
         self.latent_dim = latent_dim
+        self.register_buffer('scale', torch.tensor(0.75))
         self.decoder = nn.Sequential(
             nn.Linear(self.latent_dim, 2048),  # -> (2048)
             nn.ReLU(),
@@ -90,9 +91,7 @@ class Decoder(nn.Module):
 
     def forward(self, z):
         x_hat = self.decoder(z)
-        return x_hat, torch.tensor(0.75).to(
-            z.device
-        )  # NOTE: consider learning scale param, too
+        return x_hat, self.scale  # NOTE: consider learning scale param, too
 
 
 class ResnetBlock(nn.Module):
@@ -175,7 +174,7 @@ class ResnetEncoder(nn.Module):
         batch_size = x.size(0)
         out = self.conv_img(x)
         out = self.resnet(out)
-        out = out.view(batch_size, self.nf0 * self.s0 * self.s0)
+        out = out.reshape(batch_size, self.nf0 * self.s0 * self.s0)
         # out = self.fc(actvn(out))
         return self.fc_mu(out), self.fc_lv(out)
 
@@ -184,6 +183,7 @@ class ResnetDecoder(nn.Module):
     def __init__(self, cfg):  # , z_dim, size, nfilter=64, nfilter_max=512, **kwargs):
         super().__init__()
         self.latent_dim = cfg.model.latent_dim
+        self.register_buffer('scale', torch.tensor(0.75))
 
         # NOTE: I've modified/set below variables according to Kieran's suggestions
         s0 = self.s0 = 7  # kwargs['s0']
@@ -213,10 +213,8 @@ class ResnetDecoder(nn.Module):
     def forward(self, z):
         batch_size = z.size(0)
         out = self.fc(z)
-        out = out.view(batch_size, self.nf0, self.s0, self.s0)
+        out = out.reshape(batch_size, self.nf0, self.s0, self.s0)
         out = self.resnet(out)
         out = self.conv_img(actvn(out))
-        return out, torch.tensor(0.75).to(
-            z.device
-        )  # NOTE: consider learning scale param, too
+        return out, self.scale  # NOTE: consider learning scale param, too
         # return torch.sigmoid(out)  # torch.tanh(out), torch.sigmoid(out)

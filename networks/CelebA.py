@@ -14,7 +14,7 @@ class LinearFeatureCompressor(nn.Module):
         self.logvar = nn.Linear(in_channels, out_channels, bias=False)
 
     def forward(self, feats):
-        feats = feats.view(feats.size(0), -1)
+        feats = feats.reshape(feats.size(0), -1)
         mu, logvar = self.mu(feats), self.logvar(feats)
         return mu, logvar
 
@@ -74,7 +74,7 @@ class EncoderImg(nn.Module):
 
     def forward(self, x_img):
         h_img = self.feature_extractor(x_img)
-        h_img = h_img.view(h_img.shape[0], h_img.shape[1], h_img.shape[2])
+        h_img = h_img.reshape(h_img.shape[0], h_img.shape[1], h_img.shape[2])
         mu, logvar = self.feature_compressor(h_img)
         return mu, logvar
 
@@ -92,11 +92,12 @@ class DecoderImg(nn.Module):
             a=cfg.dataset.skip_connections_img_weight_a,
             b=cfg.dataset.skip_connections_img_weight_b,
         )
+        self.register_buffer('scale', torch.tensor(0.75))
 
     def forward(self, z):
         img_feat_hat = self.feature_generator(z)
-        img_feat_hat = img_feat_hat.view(
+        img_feat_hat = img_feat_hat.reshape(
             img_feat_hat.size(0), img_feat_hat.size(1), 1, 1
         )
         img_hat = self.img_generator(img_feat_hat)
-        return img_hat, torch.tensor(0.75).to(z.device)
+        return img_hat, self.scale

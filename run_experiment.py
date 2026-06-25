@@ -4,6 +4,7 @@ from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.utilities.model_summary.model_summary import ModelSummary
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+from pytorch_lightning.profilers import PyTorchProfiler
 import wandb
 
 import hydra
@@ -13,6 +14,9 @@ import torch # added for torch.set_float32_matmul_precision
 from utils import dataset
 from config.UserVariables import folder_path
 torch.set_float32_matmul_precision('high')
+print("[OPTIMISATION] TensorFloat32 (TF32) matmul precision enabled ('high').")
+torch.backends.cudnn.benchmark = True
+print("[OPTIMISATION] cuDNN Benchmark enabled (will profile algorithms on first batch).")
 os.environ["WANDB__SERVICE_WAIT"] = "300"
 
 # experiment configs 
@@ -97,10 +101,16 @@ def run_experiment(cfg: ExperimentConfig):
         model = MVJointPriorVAE(cfg)
     assert model is not None
     model.assign_label_names(label_names)
+
+    # Convert model to channels_last for optimal GPU kernel dispatch
+    if cfg.model.device == "cuda":
+        model = model.to(memory_format=torch.channels_last)
+        print("[OPTIMISATION] Model converted to channels_last memory format for Tensor Cores.")
     summary = ModelSummary(model, max_depth=2)
     print(summary)
-     #{model_name}_{aggregation}_{alpha_scalar}_{early_stop}_{beta_annealing}_{beta_M}_{seed}
-    filename= f'{cfg.model.name}_{cfg.model.aggregation}_{cfg.model.alpha_scalar}_{cfg.model.early_stop}_{cfg.model.beta_annealing}_{cfg.model.beta_M}_{cfg.model.seed}'
+    agg = getattr(cfg.model, "aggregation", "none") if "aggregation" in cfg.model else "none"
+    alpha = getattr(cfg.model, "alpha_scalar", "none") if "alpha_scalar" in cfg.model else "none"
+    filename = f'{cfg.model.name}_{agg}_{alpha}_{cfg.model.early_stop}_{cfg.model.beta_annealing}_{cfg.model.beta_M}_{cfg.model.seed}'
     checkpoint_callback = ModelCheckpoint(
         dirpath=cfg.log.dir_logs,
         monitor=cfg.checkpoint_metric,
@@ -120,18 +130,39 @@ def run_experiment(cfg: ExperimentConfig):
         entity=cfg.log.wandb_entity,
         save_dir=cfg.log.dir_logs,
     )
+    
+    profiler = None
+    if getattr(cfg.log, "profile", False):
+        profiler = PyTorchProfiler(
+            dirpath=os.path.join(cfg.log.dir_logs, "profiler"),
+            filename=f"profiler_{filename}",
+            export_to_chrome=True,
+            record_shapes=True,
+            profile_memory=True,
+            with_stack=True,
+            schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=2),
+            activities=[
+                torch.profiler.ProfilerActivity.CPU,
+                torch.profiler.ProfilerActivity.CUDA,
+            ]
+        )
+
     trainer = pl.Trainer(
         max_epochs=cfg.model.epochs,
         devices=1,
         accelerator="gpu" if cfg.model.device == "cuda" else cfg.model.device,
+        precision="bf16-mixed" if cfg.model.device == "cuda" else "32-true",
         logger=wandb_logger,
         check_val_every_n_epoch=cfg.log.val_freq,
         deterministic=True,
         callbacks=[checkpoint_callback, early_stopping] if cfg.model.early_stop else [checkpoint_callback],
+        profiler=profiler,
     )
 
     if cfg.log.debug:
         trainer.logger.watch(model, log="all")
+        
+
     # train and evaluate model
     trainer.fit(model=model, train_dataloaders=train_loader, val_dataloaders=val_loader)
     # log metrics

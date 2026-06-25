@@ -67,16 +67,12 @@ class MVunimodalVAE(MVVAE):
             beta_weight = self.cfg.model.final_beta_value
         self.log("beta annealing", beta_weight)
         # kl divergence of latent distribution
-        klds = []
-        for _, key in enumerate(self.modality_names):
-            dist_m = dists_out[key]
-            kld_m = self.kl_div_z(dist_m)
-            klds.append(kld_m.unsqueeze(1))
-            self.log(
-                f"{str_set}/loss/kld_{key}",
-                kld_m.mean(dim=0),
-            )
-        klds_sum = torch.cat(klds, dim=1).sum(dim=1)
+        all_mus = torch.stack([dists_out[k][0] for k in self.modality_names], dim=1)
+        all_lvs = torch.stack([dists_out[k][1] for k in self.modality_names], dim=1)
+        klds_all = -0.5 * torch.sum(1 - all_lvs.exp() - all_mus.pow(2) + all_lvs, dim=-1)
+        for m, key in enumerate(self.modality_names):
+            self.log(f"{str_set}/loss/kld_{key}", klds_all[:, m].mean(dim=0))
+        klds_sum = klds_all.sum(dim=1)
 
         ## compute reconstruction loss/ conditional log-likelihood out data
         ## given latents

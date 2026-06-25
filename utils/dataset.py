@@ -58,6 +58,8 @@ def get_dataset_PM(cfg):
         shuffle=True,
         num_workers=cfg.dataset.num_workers,
         drop_last=True,
+        pin_memory=(cfg.model.device == "cuda"),
+        persistent_workers=(cfg.dataset.num_workers > 0)
     )
     val_loader = torch.utils.data.DataLoader(
         val_dst,
@@ -65,6 +67,8 @@ def get_dataset_PM(cfg):
         shuffle=False,
         num_workers=cfg.dataset.num_workers,
         drop_last=True,
+        pin_memory=(cfg.model.device == "cuda"),
+        persistent_workers=(cfg.dataset.num_workers > 0)
     )
     return train_loader, train_dst, val_loader, val_dst
   
@@ -79,6 +83,8 @@ def get_dataset_sc(cfg):
         shuffle=True,
         num_workers=cfg.dataset.num_workers,
         drop_last=True,
+        pin_memory=(cfg.model.device == "cuda"),
+        persistent_workers=(cfg.dataset.num_workers > 0)
     )
     val_loader = torch.utils.data.DataLoader(
         eval_dst,
@@ -86,6 +92,8 @@ def get_dataset_sc(cfg):
         shuffle=False,
         num_workers=cfg.dataset.num_workers,
         drop_last=True,
+        pin_memory=(cfg.model.device == "cuda"),
+        persistent_workers=(cfg.dataset.num_workers > 0)
     )
     return train_loader, train_dst, val_loader, eval_dst
 
@@ -104,6 +112,8 @@ def get_dataset_celeba(cfg):
         shuffle=True,
         num_workers=cfg.dataset.num_workers,
         drop_last=True,
+        pin_memory=(cfg.model.device == "cuda"),
+        persistent_workers=(cfg.dataset.num_workers > 0)
     )
     val_loader = torch.utils.data.DataLoader(
         d_eval,
@@ -111,6 +121,8 @@ def get_dataset_celeba(cfg):
         shuffle=False,
         num_workers=cfg.dataset.num_workers,
         drop_last=True,
+        pin_memory=(cfg.model.device == "cuda"),
+        persistent_workers=(cfg.dataset.num_workers > 0)
     )
     return train_loader, d_train, val_loader, d_eval
 

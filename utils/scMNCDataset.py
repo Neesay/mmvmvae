@@ -53,11 +53,11 @@ class scMNC(Dataset):
             )[dp] for x in range(num_samples)]
         self.exp_data = preprocessing.scale(
           self.exp_data.loc[partition].to_numpy()
-          )
+          ).astype(np.float32)
         self.feat_data = preprocessing.scale(
           pd.read_csv(filename_feat).loc[partition].to_numpy()
-         ) 
-        self.labels = pd.read_csv(filename_labels).loc[partition].to_numpy().reshape(-1)
+         ).astype(np.float32) 
+        self.labels = pd.read_csv(filename_labels).loc[partition].to_numpy().reshape(-1).astype(np.int64)
         self.num_files = len(self.labels)
 
     @staticmethod
@@ -137,8 +137,8 @@ class scMNC(Dataset):
         for the given index and labels is the corresponding cell type label.
         """
 
-        data_dict = {"exp": torch.from_numpy(self.exp_data[index]).float(),
-                     "feat": torch.from_numpy(self.feat_data[index]).float()}
+        data_dict = {"exp": torch.from_numpy(self.exp_data[index]),
+                     "feat": torch.from_numpy(self.feat_data[index])}
         return (
             data_dict,
             self.labels[index],

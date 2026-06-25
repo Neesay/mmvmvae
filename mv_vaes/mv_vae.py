@@ -33,6 +33,20 @@ class MVVAE(pl.LightningModule):
 
         self.encoders, self.decoders, self.cov_mat, self.covariance, self.mu = get_networks(cfg)
 
+        # [OPTIMISATION] Target PyTorch compiler (torch.compile) specifically to inner ResNet modules.
+        # This prevents massive recompilation overhead caused by compiling the entire LightningModule at once.
+        if getattr(cfg.model, "compile", False):
+            print(f"[OPTIMISATION] torch.compile enabled with mode='default' for {len(self.encoders)} encoders and {len(self.decoders)} decoders.")
+            for i in range(len(self.encoders)):
+                self.encoders[i] = torch.compile(self.encoders[i], mode="default")
+            for i in range(len(self.decoders)):
+                self.decoders[i] = torch.compile(self.decoders[i], mode="default")
+
+        # [OPTIMISATION] Allow graceful disabling of FID calculations during validation loops (fid_logging_frequency=0).
+        # This prevents the 30+ minute bottleneck caused by computing 50 InceptionV3 forward passes per batch.
+        if getattr(cfg.log, "fid_logging_frequency", 1) == 0:
+            print("[OPTIMISATION] FID calculation is safely disabled (fid_logging_frequency=0).")
+
         if cfg.dataset.name.startswith("PM"):
             self.train_clf_lr = train_clf_lr_PM
             self.eval_clf_lr = eval_clf_lr_PM
@@ -113,6 +127,9 @@ class MVVAE(pl.LightningModule):
         self.training_step_outputs = []
 
         self.save_hyperparameters()
+
+        # buffer for laplace scale
+        self.register_buffer("_laplace_scale", torch.tensor(0.75))
 
         # buffer for final scores
         self.register_buffer("final_scores_rec_loss", torch.tensor(0))
@@ -219,12 +236,25 @@ class MVVAE(pl.LightningModule):
                     path_inception_weights=self.cfg.eval.path_inception_weights,
                 ).to(self.cfg.model.device)
 
+    def _convert_batch_channels_last(self, batch):
+        data, labels = batch
+        data_cl = {}
+        for key, val in data.items():
+            if val.ndim == 4:  # Only convert image tensors (B, C, H, W)
+                data_cl[key] = val.contiguous(memory_format=torch.channels_last)
+            else:
+                data_cl[key] = val
+        return (data_cl, labels)
+
     def training_step(self, batch, batch_idx):
+        batch = self._convert_batch_channels_last(batch)
         out = self.forward(batch)
         loss, _ = self.compute_loss("train", batch, out)
         bs = self.cfg.model.batch_size
-        if len(self.training_step_outputs) * bs < self.cfg.eval.num_samples_train:
-            self.training_step_outputs.append([out[1:], batch])
+        # Only save these massive arrays to memory if we're actually going to train downstream classifiers this epoch!
+        if (self.current_epoch + 1) % self.cfg.log.downstream_logging_frequency == 0:
+            if len(self.training_step_outputs) * bs < self.cfg.eval.num_samples_train:
+                self.training_step_outputs.append([out[1:], batch])
         return loss
       
       
@@ -238,9 +268,9 @@ class MVVAE(pl.LightningModule):
         mu = torch.zeros(total_num_latents).to(self.cfg.model.device)
         cov = torch.zeros(total_num_latents, total_num_latents).to(self.cfg.model.device)
         num_samples = torch.zeros(1).to(self.cfg.model.device)
-        # move everything under the if statement
-        if (self.current_epoch + 1) % self.cfg.log.downstream_logging_frequency == 0:
-          a = 1
+        # ONLY compute this huge covariance matrix over the entire dataset if we are actually going to log coherence this epoch!
+        if (self.current_epoch + 1) % self.cfg.log.coherence_logging_frequency != 0:
+            return
         with torch.no_grad():
             for batch in dataloader:
                 # batch_outputs = []
@@ -248,7 +278,7 @@ class MVVAE(pl.LightningModule):
                     x = batch[0]  # assumes first item is input
                 else:
                     x = batch
-                x = {key: value.to(device) for key, value in x.items()}
+                x = {key: value.to(device, non_blocking=True) for key, value in x.items()}
                 out = self.get_latent_representations(x).to(self.cfg.model.device)
                 num_batch = out.shape[0]
                 num_samples += num_batch
@@ -271,6 +301,7 @@ class MVVAE(pl.LightningModule):
         self.train()  # reset to training mode
 
     def validation_step(self, batch, batch_idx):
+        batch = self._convert_batch_channels_last(batch)
         out = self.forward(batch)
         loss, rec_loss = self.compute_loss("val", batch, out)
 
@@ -283,7 +314,7 @@ class MVVAE(pl.LightningModule):
                 pred_coh, cond_rec_loss, pred_coh_cov, cond_rec_loss_cov = None, None, None, None
         else:
             pred_coh, cond_rec_loss, pred_coh_cov, cond_rec_loss_cov = None, None, None, None
-        if (self.current_epoch + 1) % self.cfg.log.fid_logging_frequency == 0:
+        if self.cfg.log.fid_logging_frequency > 0 and (self.current_epoch + 1) % self.cfg.log.fid_logging_frequency == 0:
             if batch_idx == 0:
                 self.initialize_fid_scores()
             self.update_fid_scores(out, batch)
@@ -627,10 +658,10 @@ class MVVAE(pl.LightningModule):
         # check whether this is best validation loss yet and if yes, then save the scores for this epoch
         current_beta = self._get_current_beta_weight()
         if isinstance(current_beta, torch.Tensor):
-            current_beta_value = float(current_beta.detach().cpu().item())
+            current_beta_value = current_beta.detach()
         else:
-            current_beta_value = float(current_beta)
-        is_beta_one = math.isclose(current_beta_value, 1.0, rel_tol=1e-6, abs_tol=1e-6)
+            current_beta_value = torch.tensor(float(current_beta), device=self.device)
+        is_beta_one = torch.abs(current_beta_value - 1.0) <= 1e-6
         current_val_loss = self.trainer.callback_metrics.get("val/loss/loss")
         if current_val_loss is None:
             current_val_loss = self.final_scores_rec_loss
@@ -643,7 +674,7 @@ class MVVAE(pl.LightningModule):
         else:
             current_val_loss = current_val_loss.detach().to(self.best_val_loss.device)
 
-        if is_beta_one and torch.lt(current_val_loss, self.best_val_loss).item():
+        if is_beta_one and (current_val_loss < self.best_val_loss):
             self.best_val_loss.copy_(current_val_loss)
             self._snapshot_best_scores()
         
@@ -744,7 +775,7 @@ class MVVAE(pl.LightningModule):
                     )
                     # log the images
 
-        if (self.current_epoch + 1) % self.cfg.log.fid_logging_frequency == 0:
+        if self.cfg.log.fid_logging_frequency > 0 and (self.current_epoch + 1) % self.cfg.log.fid_logging_frequency == 0:
             for m, key in enumerate(self.modality_names):
                 for m_tilde, key_tilde in enumerate(self.modality_names):
                     if key_tilde in ("text", "exp", "feat"):
@@ -908,6 +939,12 @@ class MVVAE(pl.LightningModule):
     
 
     def calc_kl_divergence(self, mu0, logvar0, mu1=None, logvar1=None, norm_value=None):
+        mu0 = mu0.float()
+        logvar0 = logvar0.float()
+        if mu1 is not None:
+            mu1 = mu1.float()
+        if logvar1 is not None:
+            logvar1 = logvar1.float()
         if mu1 is None or logvar1 is None:
             kld = -0.5 * torch.sum(1 - logvar0.exp() - mu0.pow(2) + logvar0, dim=-1)
         else:
@@ -927,6 +964,8 @@ class MVVAE(pl.LightningModule):
     
     def calc_kl_divergence_orthog(self, mu0, logvar0, cov_scalar,           
                                   norm_value=None):
+        mu0 = mu0.float()
+        logvar0 = logvar0.float()
         if cov_scalar is None:
             kld = -0.5 * torch.sum(1 - logvar0.exp() - mu0.pow(2) + logvar0, dim=-1)
         else:
@@ -946,7 +985,10 @@ class MVVAE(pl.LightningModule):
     
     def calc_kl_divergence_cov(self, mu0, logvar0, cov_inv=None,
                                norm_value=None):
-       
+       mu0 = mu0.float()
+       logvar0 = logvar0.float()
+       if cov_inv is not None:
+           cov_inv = cov_inv.float()
        cov_inv_device = cov_inv.to(self.device)
        mu0_device = mu0.to(self.device)
        mu_term =  torch.matmul(torch.matmul(mu0_device, cov_inv_device), mu0_device)
@@ -976,12 +1018,12 @@ class MVVAE(pl.LightningModule):
                 log_p_mod_m = mod_d_out_m.log_prob(mod_gt_m).sum(dim=[1])
             elif key in ("exp", "feat"):
                 mod_d_out_m = torch.distributions.laplace.Laplace(
-                    mod_rec_m[0], torch.tensor(0.75).to(self.device)
+                    mod_rec_m[0], self._laplace_scale
                 )
                 log_p_mod_m = mod_d_out_m.log_prob(mod_gt_m).sum(dim=[1])
             else:
                 mod_d_out_m = torch.distributions.laplace.Laplace(
-                    mod_rec_m[0], torch.tensor(0.75).to(self.device)
+                    mod_rec_m[0], self._laplace_scale
                 )
                 log_p_mod_m = mod_d_out_m.log_prob(mod_gt_m).sum(dim=[1, 2, 3])
                 
@@ -992,10 +1034,17 @@ class MVVAE(pl.LightningModule):
         return rec_loss_avg, rec_loss_mods, rec_loss_mods_weighted
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(
-            self.parameters(),
-            lr=self.cfg.model.lr,
-        )
+        try:
+            optimizer = torch.optim.Adam(
+                self.parameters(),
+                lr=self.cfg.model.lr,
+                fused=True
+            )
+        except Exception:
+            optimizer = torch.optim.Adam(
+                self.parameters(),
+                lr=self.cfg.model.lr,
+            )
         return {
             "optimizer": optimizer,
         }

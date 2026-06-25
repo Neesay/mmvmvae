@@ -33,6 +33,8 @@ class MVJointVAE(MVVAE):
         for m, key in enumerate(self.modality_names):
             mod_m = data[key]
             mu_m, lv_m = self.encoders[m](mod_m)
+            # [OPTIMISATION] Clone tensors outputted by compiled modules to prevent PyTorch from overwriting static memory pools when using CUDA Graphs.
+            mu_m, lv_m = mu_m.clone(), lv_m.clone()
             mus.append(mu_m.unsqueeze(1))
             lvs.append(lv_m.unsqueeze(1))
             dists_enc_out[key] = [mu_m, lv_m]
@@ -48,6 +50,11 @@ class MVJointVAE(MVVAE):
         # for m in range(0, self.cfg.dataset.num_views):
         for m, key in enumerate(self.modality_names):
             mod_hat_m = self.decoders[m](z_out)
+            # [OPTIMISATION] Clone decoder outputs to prevent inplace CUDA Graphs memory errors during compilation.
+            if isinstance(mod_hat_m, tuple):
+                mod_hat_m = tuple(t.clone() if isinstance(t, torch.Tensor) else t for t in mod_hat_m)
+            elif isinstance(mod_hat_m, torch.Tensor):
+                mod_hat_m = mod_hat_m.clone()
             mods_rec[key] = mod_hat_m
 
             dist_out_m = [mu_out, lv_out]
@@ -81,12 +88,9 @@ class MVJointVAE(MVVAE):
         self.log("beta annealing", beta_weight)
         
         # kl divergence of latent distribution
-        klds = []
-        for _, key in enumerate(self.modality_names):
-            dist_m = dists_out[key]
-            kld_m = self.kl_div_z(dist_m)
-            klds.append(kld_m.unsqueeze(1))
-        klds_sum = torch.cat(klds, dim=1).sum(dim=1)
+        all_mus = torch.stack([dists_out[k][0] for k in self.modality_names], dim=1)
+        all_lvs = torch.stack([dists_out[k][1] for k in self.modality_names], dim=1)
+        klds_sum = (-0.5 * torch.sum(1 - all_lvs.exp() - all_mus.pow(2) + all_lvs, dim=-1)).sum(dim=1)
 
         ## compute reconstruction loss/ conditional log-likelihood out data
         ## given latents
