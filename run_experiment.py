@@ -131,7 +131,7 @@ def run_experiment(cfg: ExperimentConfig):
         save_dir=cfg.log.dir_logs,
     )
     
-    profiler = None
+    profiler = "simple"
     if getattr(cfg.log, "profile", False):
         profiler = PyTorchProfiler(
             dirpath=os.path.join(cfg.log.dir_logs, "profiler"),
