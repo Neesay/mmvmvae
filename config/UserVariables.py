@@ -1,3 +1,3 @@
 import os
-folder_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + "/"
+folder_path = "/data/yma26/mmvmvae/"
 wandb_entity = ""
