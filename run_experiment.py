@@ -128,6 +128,7 @@ def run_experiment(cfg: ExperimentConfig):
         check_val_every_n_epoch=cfg.log.val_freq,
         deterministic=True,
         callbacks=[checkpoint_callback, early_stopping] if cfg.model.early_stop else [checkpoint_callback],
+        profiler="simple",
     )
 
     if cfg.log.debug:
