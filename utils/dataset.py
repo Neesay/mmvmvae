@@ -60,7 +60,7 @@ def get_dataset_PM(cfg):
         num_workers=cfg.dataset.num_workers,
         drop_last=True,
         pin_memory=(cfg.model.device == "cuda"),
-        persistent_workers=(cfg.dataset.num_workers > 0)
+        persistent_workers=False
     )
     val_loader = torch.utils.data.DataLoader(
         val_dst,
@@ -69,7 +69,7 @@ def get_dataset_PM(cfg):
         num_workers=cfg.dataset.num_workers,
         drop_last=True,
         pin_memory=(cfg.model.device == "cuda"),
-        persistent_workers=(cfg.dataset.num_workers > 0)
+        persistent_workers=False
     )
     return train_loader, train_dst, val_loader, val_dst
   
