@@ -10,7 +10,9 @@ import omegaconf.dictconfig
 
 import omegaconf.base
 import omegaconf.listconfig
-torch.serialization.add_safe_globals([omegaconf.dictconfig.DictConfig, omegaconf.base.ContainerMetadata, omegaconf.listconfig.ListConfig])
+import omegaconf.nodes
+import typing
+torch.serialization.add_safe_globals([omegaconf.dictconfig.DictConfig, omegaconf.base.ContainerMetadata, omegaconf.listconfig.ListConfig, typing.Any, omegaconf.nodes.AnyNode])
 
 from clfs.polymnist_clf import ClfPolyMNIST
 from clfs.celeba_clf import ClfCelebA
