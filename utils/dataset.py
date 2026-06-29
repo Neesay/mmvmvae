@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import torch
+torch.multiprocessing.set_sharing_strategy('file_system')
 from torchvision import transforms
 
 from utils.PolyMNISTDataset import PolyMNIST
@@ -75,7 +76,6 @@ def get_dataset_PM(cfg):
 def get_dataset_sc(cfg):
     train_dst = scMNC(cfg.dataset.dir_data, cfg.model.seed, train=True)
     eval_dst = scMNC(cfg.dataset.dir_data, cfg.model.seed, train=False)
-    torch.multiprocessing.set_sharing_strategy('file_system')
     
     train_loader = torch.utils.data.DataLoader(
         train_dst,
