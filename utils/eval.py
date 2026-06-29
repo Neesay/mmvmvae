@@ -8,11 +8,14 @@ from sklearn.metrics import average_precision_score
 import torch
 import omegaconf.dictconfig
 
-import omegaconf.base
-import omegaconf.listconfig
-import omegaconf.nodes
-import typing
-torch.serialization.add_safe_globals([omegaconf.dictconfig.DictConfig, omegaconf.base.ContainerMetadata, omegaconf.listconfig.ListConfig, typing.Any, omegaconf.nodes.AnyNode])
+# PyTorch 2.6 weights_only=True bypass monkey patch
+import functools
+_original_load = torch.load
+@functools.wraps(_original_load)
+def _patched_load(*args, **kwargs):
+    kwargs['weights_only'] = False
+    return _original_load(*args, **kwargs)
+torch.load = _patched_load
 
 from clfs.polymnist_clf import ClfPolyMNIST
 from clfs.celeba_clf import ClfCelebA
