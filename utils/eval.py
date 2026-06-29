@@ -8,7 +8,9 @@ from sklearn.metrics import average_precision_score
 import torch
 import omegaconf.dictconfig
 
-torch.serialization.add_safe_globals([omegaconf.dictconfig.DictConfig])
+import omegaconf.base
+import omegaconf.listconfig
+torch.serialization.add_safe_globals([omegaconf.dictconfig.DictConfig, omegaconf.base.ContainerMetadata, omegaconf.listconfig.ListConfig])
 
 from clfs.polymnist_clf import ClfPolyMNIST
 from clfs.celeba_clf import ClfCelebA
