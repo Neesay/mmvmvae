@@ -681,6 +681,7 @@ class MVVAE(pl.LightningModule):
         
         # log images
         if (self.current_epoch + 1) % self.cfg.log.img_plotting_frequency == 0:
+          with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             n_samples_plot = min(100, self.cfg.model.batch_size_eval)
             n_samples_row = int(math.sqrt(n_samples_plot))
             # plotting samples
