@@ -705,7 +705,7 @@ class MVVAE(pl.LightningModule):
                 elif key == "text":
                     continue
                 imgs_grid_m = make_grid(random_gen_m, nrow=n_samples_row)
-                imgs_grid_m = t_f.to_pil_image(imgs_grid_m)
+                imgs_grid_m = t_f.to_pil_image(imgs_grid_m.float())
                 self.logger.log_image(
                     key="random generations " + key,
                     images=[wandb.Image(imgs_grid_m)],
@@ -758,7 +758,7 @@ class MVVAE(pl.LightningModule):
                         ),
                         nrow=n_samples_row,
                     )
-                    mod_grid_m_m_tilde = t_f.to_pil_image(mod_grid_m_m_tilde)
+                    mod_grid_m_m_tilde = t_f.to_pil_image(mod_grid_m_m_tilde.float())
                     self.logger.log_image(
                         key="cond_gen_" + key + "_to_" + key_tilde,
                         images=[wandb.Image(mod_grid_m_m_tilde)],
@@ -770,7 +770,7 @@ class MVVAE(pl.LightningModule):
                         ),
                         nrow=n_samples_row,
                     )
-                    mod_grid_m_m_tilde_cov = t_f.to_pil_image(mod_grid_m_m_tilde_cov)
+                    mod_grid_m_m_tilde_cov = t_f.to_pil_image(mod_grid_m_m_tilde_cov.float())
                     self.logger.log_image(
                         key="cond_gen_cov_" + key + "_to_" + key_tilde,
                         images=[wandb.Image(mod_grid_m_m_tilde_cov)],
