@@ -155,6 +155,7 @@ def run_experiment(cfg: ExperimentConfig):
         logger=wandb_logger,
         check_val_every_n_epoch=cfg.log.val_freq,
         deterministic=True,
+        num_sanity_val_steps=0,
         callbacks=[checkpoint_callback, early_stopping] if cfg.model.early_stop else [checkpoint_callback],
         profiler=profiler,
     )

@@ -480,6 +480,7 @@ class MVVAE(pl.LightningModule):
         enc_mu_enc_train = {key: [] for key in self.modality_names}
         labels_train = []
         if len(self.training_step_outputs) == 0:
+            self.validation_step_outputs.clear()  # prevent stale sanity-check outputs
             return
         
         for _, train_out in enumerate(self.training_step_outputs):
