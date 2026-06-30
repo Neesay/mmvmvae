@@ -23,23 +23,23 @@ from clfs.scMNC_clf import ClfscMNC
 
 
 def train_clf_lr_PM(encodings, labels):
-    clf = LogisticRegression(max_iter=10000).fit(encodings.cpu(), labels.cpu())
+    clf = LogisticRegression(max_iter=10000).fit(encodings.float().cpu(), labels.cpu())
     return clf
 
 
 def eval_clf_lr_PM(clf, encodings, labels):
-    y_pred = clf.predict(encodings.cpu())
+    y_pred = clf.predict(encodings.float().cpu())
     acc = accuracy_score(labels.cpu(), y_pred)
     return np.array(acc)
   
 
 def train_clf_lr_scMNC(encodings, labels):
-    clf = LogisticRegression(max_iter=10000).fit(encodings.cpu(), labels.cpu())
+    clf = LogisticRegression(max_iter=10000).fit(encodings.float().cpu(), labels.cpu())
     return clf
 
 
 def eval_clf_lr_scMNC(clf, encodings, labels):
-    y_pred = clf.predict(encodings.cpu())
+    y_pred = clf.predict(encodings.float().cpu())
     acc = accuracy_score(labels.cpu(), y_pred)
     return np.array(acc)
 
@@ -49,7 +49,7 @@ def train_clf_lr_celeba(encodings, labels):
     clfs = []
     for k in range(0, n_labels):
         clf = LogisticRegression(max_iter=10000).fit(
-            encodings.cpu(), labels[:, k].cpu()
+            encodings.float().cpu(), labels[:, k].cpu()
         )
         clfs.append(clf)
     return clfs
@@ -60,7 +60,7 @@ def eval_clf_lr_celeba(clfs, encodings, labels):
     scores = torch.zeros(n_labels)
     for k in range(0, n_labels):
         clf_k = clfs[k]
-        y_pred_k = clf_k.predict(encodings.cpu())
+        y_pred_k = clf_k.predict(encodings.float().cpu())
         ap = average_precision_score(labels[:, k].cpu(), y_pred_k)
         scores[k] = ap
     return scores
@@ -145,7 +145,7 @@ def from_preds_to_acc(preds, labels, modality_names):
             preds_m_mtilde = preds[:, m, m_tilde, :]
             acc_m_mtilde = accuracy_score(
                 labels.cpu(),
-                np.argmax(preds_m_mtilde.cpu().numpy(), axis=1).astype(int),
+                np.argmax(preds_m_mtilde.float().cpu().numpy(), axis=1).astype(int),
             )
             accs[m, m_tilde, 0] = acc_m_mtilde
     return accs
@@ -160,7 +160,7 @@ def from_preds_to_ap(preds, labels, modality_names):
             preds_m_mtilde = preds[:, m, m_tilde, :]
             for k in range(0, n_labels):
                 ap_m_mtilde_k = average_precision_score(
-                    labels[:, k].cpu(), preds_m_mtilde[:, k].detach().cpu().numpy()
+                    labels[:, k].cpu(), preds_m_mtilde[:, k].detach().float().cpu().numpy()
                 )
                 aps[m, m_tilde, k] = ap_m_mtilde_k
     return aps
