@@ -151,7 +151,7 @@ def run_experiment(cfg: ExperimentConfig):
         max_epochs=cfg.model.epochs,
         devices=1,
         accelerator="gpu" if cfg.model.device == "cuda" else cfg.model.device,
-        precision="bf16-mixed" if cfg.model.device == "cuda" else "32-true",
+        precision="32-true",
         logger=wandb_logger,
         check_val_every_n_epoch=cfg.log.val_freq,
         deterministic=True,
