@@ -24,6 +24,12 @@ class ModelConfig:
 
     # network architectures
     use_resnets: bool = True
+    # torch.compile() each encoder/decoder individually (not the LightningModule,
+    # which has too much data-dependent Python branching to compile cleanly).
+    # Fuses kernels in the conv/linear stacks for extra tensor-core throughput
+    # on Ampere+ GPUs. Off by default -- enable per-run once you've verified it
+    # compiles cleanly in your environment.
+    compile_networks: bool = False
 
 @dataclass
 class JointModelConfig(ModelConfig):

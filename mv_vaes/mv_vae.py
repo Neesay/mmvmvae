@@ -1,6 +1,6 @@
 import sys
 import math
-from itertools import chain, combinations
+from itertools import combinations
 
 import torch
 import pytorch_lightning as pl
@@ -32,6 +32,15 @@ class MVVAE(pl.LightningModule):
         self.cfg = cfg
 
         self.encoders, self.decoders, self.cov_mat, self.covariance, self.mu = get_networks(cfg)
+        self._update_cov_diag_chol()
+        # fixed, data-independent list of non-empty modality-index subsets used
+        # by MoPoE aggregation; precomputed once instead of every forward call
+        xs = range(0, cfg.dataset.num_views)
+        self._mopoe_subsets = [
+            tuple(sorted(s))
+            for n in range(1, len(xs) + 1)
+            for s in combinations(xs, n)
+        ]
 
         if cfg.dataset.name.startswith("PM"):
             self.train_clf_lr = train_clf_lr_PM
@@ -224,11 +233,33 @@ class MVVAE(pl.LightningModule):
         loss, _ = self.compute_loss("train", batch, out)
         bs = self.cfg.model.batch_size
         if len(self.training_step_outputs) * bs < self.cfg.eval.num_samples_train:
-            self.training_step_outputs.append([out[1:], batch])
+            # detach before storing: these dists are only read back in
+            # on_validation_epoch_end, and keeping them attached to the
+            # autograd graph for a whole epoch wastes memory
+            detached_dists = [
+                {key: [mu.detach(), lv.detach()] for key, (mu, lv) in dists.items()}
+                for dists in out[1:]
+            ]
+            self.training_step_outputs.append([detached_dists, batch])
         return loss
       
       
+    def _cov_needed_this_epoch(self):
+        # self.covariance/self.mu are only consumed by cond_generate_samples_cov,
+        # which is only exercised by the coherence-with-covariance and
+        # FID-with-covariance evaluation paths in validation_step. Recomputing
+        # the full-dataset covariance is a second full pass over the encoders,
+        # so only pay for it on epochs where one of those paths will actually run.
+        next_epoch = self.current_epoch + 1
+        need_coh = self.cfg.eval.coherence and (
+            next_epoch % self.cfg.log.coherence_logging_frequency == 0
+        )
+        need_fid = next_epoch % self.cfg.log.fid_logging_frequency == 0
+        return need_coh or need_fid
+
     def on_train_epoch_end(self):
+        if not self._cov_needed_this_epoch():
+            return
         self.eval()  # set to eval mode
         dataloader = self.trainer.train_dataloader # doesn't work
         # device = self.device  # current device (CPU or GPU)
@@ -238,9 +269,6 @@ class MVVAE(pl.LightningModule):
         mu = torch.zeros(total_num_latents).to(self.cfg.model.device)
         cov = torch.zeros(total_num_latents, total_num_latents).to(self.cfg.model.device)
         num_samples = torch.zeros(1).to(self.cfg.model.device)
-        # move everything under the if statement
-        if (self.current_epoch + 1) % self.cfg.log.downstream_logging_frequency == 0:
-          a = 1
         with torch.no_grad():
             for batch in dataloader:
                 # batch_outputs = []
@@ -259,7 +287,7 @@ class MVVAE(pl.LightningModule):
                 # outputs.append(out)
                 batch_cov = torch.mm(out.T, out)
                 cov += batch_cov
-            
+
             cov /= num_samples - 1
             cov_est = cov - 1 / ((num_samples - 1) * num_samples) * torch.outer(mu, mu)  # empirical covariance
 
@@ -268,6 +296,7 @@ class MVVAE(pl.LightningModule):
         self.covariance = cov_est.to(self.cfg.model.device)
         mu = mu / num_samples
         self.mu = mu.to(self.cfg.model.device)
+        self._update_cov_diag_chol()
         self.train()  # reset to training mode
 
     def validation_step(self, batch, batch_idx):
@@ -354,9 +383,11 @@ class MVVAE(pl.LightningModule):
             mu_m, lv_m = dists_enc_out[key]
             mods_m_gen = {}
             mods_m_cov_gen = {}
+            # sample once per source modality m: every target m_tilde should be
+            # conditioned on the same z_m draw, not an independent resample
+            z_m = self.reparametrize(mu_m, lv_m)
             # for m_tilde in range(n_views):
             for m_tilde, key_tilde in enumerate(self.modality_names):
-                z_m = self.reparametrize(mu_m, lv_m)
                 mod_c_gen_m_tilde = self.cond_generate_samples(m_tilde, z_m)
                 mod_c_cor_gen_m_tilde = self.cond_generate_samples_cov(m, m_tilde, z_m)
                 mods_m_gen[key_tilde] = mod_c_gen_m_tilde[0]
@@ -404,12 +435,30 @@ class MVVAE(pl.LightningModule):
         C_m_in_m_out = self.covariance[row_start:row_end, col_start:col_end]
         return C_m_in_m_out
 
+    def _update_cov_diag_chol(self):
+        # Precompute the Cholesky factor of each modality's own diagonal
+        # covariance block once per covariance update, instead of inverting it
+        # from scratch on every single conditional_z call. The same block is
+        # reused across every (m_in, m_tilde) pair, for every batch, for the
+        # whole epoch, so factorizing once amortizes an O(d^3) op that used to
+        # happen up to num_views^2 times per validation batch.
+        d = self.cfg.model.latent_dim
+        self._cov_diag_chol = [
+            torch.linalg.cholesky(
+                self.covariance[m * d : (m + 1) * d, m * d : (m + 1) * d]
+            )
+            for m in range(self.cfg.dataset.num_views)
+        ]
+
     def conditional_z(self, m_in, m_out, z_in):
         C_m_in_m_out = self.extract_relevant_cov(m_in, m_out)
         # assuming mu=0
-        C_m_in_m_in = self.extract_relevant_cov(m_in, m_in)
         z_shift = z_in - self.mu[m_in * self.cfg.model.latent_dim : (m_in + 1) * self.cfg.model.latent_dim]
-        z_med = torch.mm(torch.mm(C_m_in_m_out, C_m_in_m_in.inverse()), torch.transpose(z_shift, 0, 1))
+        # C_m_in_m_out @ inv(C_m_in_m_in) @ z_shift.T, solved via the cached
+        # Cholesky factor of C_m_in_m_in rather than forming the inverse
+        # explicitly (same result, avoids a redundant O(d^3) factorization).
+        rhs = torch.cholesky_solve(torch.transpose(z_shift, 0, 1), self._cov_diag_chol[m_in])
+        z_med = torch.mm(C_m_in_m_out, rhs)
         z_out = torch.transpose(z_med, 0, 1) + self.mu[m_out * self.cfg.model.latent_dim : (m_out + 1) * self.cfg.model.latent_dim]
         return z_out
 
@@ -423,12 +472,13 @@ class MVVAE(pl.LightningModule):
         imgs = batch[0]
         for m, key in enumerate(self.modality_names):
             mu_m, lv_m = dists_enc_out[key]
+            # sample once per source modality m, reused for every target m_tilde
+            z_m = self.reparametrize(mu_m, lv_m)
             for m_tilde, key_tilde in enumerate(self.modality_names):
                 if key_tilde in ("text", "exp", "feat"):
                     continue
                 imgs_m_tilde = imgs[key_tilde]
                 fid = self.fid_scores[key + "_to_" + key_tilde]
-                z_m = self.reparametrize(mu_m, lv_m)
                 # mod_c_gen_m_tilde = self.decoders[m_tilde](z_m)
                 mod_c_gen_m_tilde = self.cond_generate_samples(m_tilde, z_m)
                 # compute fids between original and generated samples from key_tilde modality_names
@@ -976,12 +1026,12 @@ class MVVAE(pl.LightningModule):
                 log_p_mod_m = mod_d_out_m.log_prob(mod_gt_m).sum(dim=[1])
             elif key in ("exp", "feat"):
                 mod_d_out_m = torch.distributions.laplace.Laplace(
-                    mod_rec_m[0], torch.tensor(0.75).to(self.device)
+                    mod_rec_m[0], 0.75
                 )
                 log_p_mod_m = mod_d_out_m.log_prob(mod_gt_m).sum(dim=[1])
             else:
                 mod_d_out_m = torch.distributions.laplace.Laplace(
-                    mod_rec_m[0], torch.tensor(0.75).to(self.device)
+                    mod_rec_m[0], 0.75
                 )
                 log_p_mod_m = mod_d_out_m.log_prob(mod_gt_m).sum(dim=[1, 2, 3])
                 
@@ -1042,22 +1092,16 @@ class MVVAE(pl.LightningModule):
         return joint_mu, joint_lv
 
     def aggregate_latents_mopoe(self, mus, lvs):
-        xs = range(0, mus.shape[1])
-        subsets_list = chain.from_iterable(
-            combinations(xs, n) for n in range(len(xs) + 1)
-        )
+        # self._mopoe_subsets (precomputed once in __init__) is the fixed list
+        # of non-empty modality-index subsets -- it only depends on num_views,
+        # not on data, so there is no need to rebuild it via itertools on every
+        # forward call. Each subset is also gathered in one indexing op instead
+        # of a per-modality Python loop + concat.
         mus_subsets = []
         lvs_subsets = []
-        for mod_indices in subsets_list:
-            if len(mod_indices) == 0:
-                continue
-            mus_sub = []
-            lvs_sub = []
-            for l, mod_idx in enumerate(sorted(mod_indices)):
-                mus_sub.append(mus[:, mod_idx, :].unsqueeze(1))
-                lvs_sub.append(lvs[:, mod_idx, :].unsqueeze(1))
-            mus_sub = torch.cat(mus_sub, dim=1)
-            lvs_sub = torch.cat(lvs_sub, dim=1)
+        for mod_indices in self._mopoe_subsets:
+            mus_sub = mus[:, mod_indices, :]
+            lvs_sub = lvs[:, mod_indices, :]
             mu_sub, lv_sub = self.aggregate_latents_poe(mus_sub, lvs_sub)
             mus_subsets.append(mu_sub.unsqueeze(1))
             lvs_subsets.append(lv_sub.unsqueeze(1))

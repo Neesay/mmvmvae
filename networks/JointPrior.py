@@ -14,16 +14,18 @@ class OrthogMat(nn.Module):
         #                                              self.latent_dim))  # Uniform initialization
         self.eigenvalues = nn.Parameter(torch.rand(self.latent_dim))  # Uniform initialization
         self.alpha_scalar = cfg.model.alpha_scalar  # scalar for orthogonalization
+        self.register_buffer("eye", torch.eye(self.latent_dim))
 
     def forward(self, x):
         # Orthogonalize the eigenvectors (using QR decomposition)
         # U: upper triangular part, subtract transpose to create a skew-symmetric matrix
         U = torch.triu(self.eigenvectorsU, diagonal=1)
         A = U - U.T
-        
-        O_U = torch.matmul(torch.eye(self.latent_dim).to(x.device) + A, torch.linalg.inv(torch.eye(self.latent_dim).to(x.device) - A))
-        # swap to using solve rather than inv
-        # O_U_x = torch.matmul(torch.eye(self.latent_dim).to(x.device) + A, torch.linalg.solve(torch.eye(self.latent_dim).to(x.device) - A, torch.eye(self.latent_dim).to(x.device)))  # see if this improves
+
+        # Cayley transform O_U = (I + A)(I - A)^-1. Since A is skew-symmetric,
+        # (I - A) and (I + A) commute, so (I + A)(I - A)^-1 == (I - A)^-1(I + A),
+        # which lets us use a linear solve instead of an explicit matrix inverse.
+        O_U = torch.linalg.solve(self.eye - A, self.eye + A)
 
         # V: similarly orthogonalize eigenvectorsV
         # V = torch.triu(self.eigenvectorsV, diagonal=1)

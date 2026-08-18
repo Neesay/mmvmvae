@@ -14,6 +14,13 @@ import torch # added for torch.set_float32_matmul_precision
 from utils import dataset
 from config.UserVariables import folder_path
 torch.set_float32_matmul_precision('high')
+# explicit alongside set_float32_matmul_precision('high'): route fp32 matmuls
+# and convolutions through TF32 on Ampere+ (A6000) tensor cores wherever an op
+# isn't already running under bf16 autocast (e.g. the JointPrior orthogonal
+# solve, covariance/Cholesky work, BatchNorm statistics). Does not change
+# which quantities are computed, only the numerical kernel used to compute them.
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
 os.environ["WANDB__SERVICE_WAIT"] = "300"
 
 # experiment configs 

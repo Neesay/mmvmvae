@@ -56,6 +56,4 @@ class scDecoder(nn.Module):
 
     def forward(self, z):
         x_hat = self.decoder(z)
-        return x_hat, torch.tensor(0.75).to(
-            z.device
-        )
+        return x_hat, 0.75

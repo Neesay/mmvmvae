@@ -90,9 +90,7 @@ class Decoder(nn.Module):
 
     def forward(self, z):
         x_hat = self.decoder(z)
-        return x_hat, torch.tensor(0.75).to(
-            z.device
-        )  # NOTE: consider learning scale param, too
+        return x_hat, 0.75  # NOTE: consider learning scale param, too
 
 
 class ResnetBlock(nn.Module):
@@ -216,7 +214,5 @@ class ResnetDecoder(nn.Module):
         out = out.view(batch_size, self.nf0, self.s0, self.s0)
         out = self.resnet(out)
         out = self.conv_img(actvn(out))
-        return out, torch.tensor(0.75).to(
-            z.device
-        )  # NOTE: consider learning scale param, too
+        return out, 0.75  # NOTE: consider learning scale param, too
         # return torch.sigmoid(out)  # torch.tanh(out), torch.sigmoid(out)
