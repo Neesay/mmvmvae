@@ -33,24 +33,33 @@ from clfs.celeba_clf import ClfCelebA
 from clfs.scMNC_clf import ClfscMNC
 
 
+def _to_np(tensor):
+    # Under precision="bf16-mixed" (see run_experiment.py), encoder/decoder/
+    # classifier outputs are bfloat16 tensors. Neither NumPy nor scikit-learn
+    # support that dtype, so anything crossing that boundary needs an explicit
+    # float32 cast first -- letting sklearn's own numpy.asarray(tensor) bridge
+    # do it raises "Got unsupported ScalarType BFloat16".
+    return tensor.detach().float().cpu().numpy()
+
+
 def train_clf_lr_PM(encodings, labels):
-    clf = LogisticRegression(max_iter=10000).fit(encodings.cpu(), labels.cpu())
+    clf = LogisticRegression(max_iter=10000).fit(_to_np(encodings), labels.cpu())
     return clf
 
 
 def eval_clf_lr_PM(clf, encodings, labels):
-    y_pred = clf.predict(encodings.cpu())
+    y_pred = clf.predict(_to_np(encodings))
     acc = accuracy_score(labels.cpu(), y_pred)
     return np.array(acc)
-  
+
 
 def train_clf_lr_scMNC(encodings, labels):
-    clf = LogisticRegression(max_iter=10000).fit(encodings.cpu(), labels.cpu())
+    clf = LogisticRegression(max_iter=10000).fit(_to_np(encodings), labels.cpu())
     return clf
 
 
 def eval_clf_lr_scMNC(clf, encodings, labels):
-    y_pred = clf.predict(encodings.cpu())
+    y_pred = clf.predict(_to_np(encodings))
     acc = accuracy_score(labels.cpu(), y_pred)
     return np.array(acc)
 
@@ -58,9 +67,10 @@ def eval_clf_lr_scMNC(clf, encodings, labels):
 def train_clf_lr_celeba(encodings, labels):
     n_labels = labels.shape[1]
     clfs = []
+    encodings_np = _to_np(encodings)
     for k in range(0, n_labels):
         clf = LogisticRegression(max_iter=10000).fit(
-            encodings.cpu(), labels[:, k].cpu()
+            encodings_np, labels[:, k].cpu()
         )
         clfs.append(clf)
     return clfs
@@ -69,9 +79,10 @@ def train_clf_lr_celeba(encodings, labels):
 def eval_clf_lr_celeba(clfs, encodings, labels):
     n_labels = labels.shape[1]
     scores = torch.zeros(n_labels)
+    encodings_np = _to_np(encodings)
     for k in range(0, n_labels):
         clf_k = clfs[k]
-        y_pred_k = clf_k.predict(encodings.cpu())
+        y_pred_k = clf_k.predict(encodings_np)
         ap = average_precision_score(labels[:, k].cpu(), y_pred_k)
         scores[k] = ap
     return scores
@@ -156,7 +167,7 @@ def from_preds_to_acc(preds, labels, modality_names):
             preds_m_mtilde = preds[:, m, m_tilde, :]
             acc_m_mtilde = accuracy_score(
                 labels.cpu(),
-                np.argmax(preds_m_mtilde.cpu().numpy(), axis=1).astype(int),
+                np.argmax(_to_np(preds_m_mtilde), axis=1).astype(int),
             )
             accs[m, m_tilde, 0] = acc_m_mtilde
     return accs
@@ -171,7 +182,7 @@ def from_preds_to_ap(preds, labels, modality_names):
             preds_m_mtilde = preds[:, m, m_tilde, :]
             for k in range(0, n_labels):
                 ap_m_mtilde_k = average_precision_score(
-                    labels[:, k].cpu(), preds_m_mtilde[:, k].detach().cpu().numpy()
+                    labels[:, k].cpu(), _to_np(preds_m_mtilde[:, k])
                 )
                 aps[m, m_tilde, k] = ap_m_mtilde_k
     return aps

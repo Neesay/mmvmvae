@@ -41,7 +41,9 @@ def seq2text(alphabet, seq):
 
 
 def tensor_to_text(alphabet, gen_t):
-    gen_t = gen_t.cpu().data.numpy()
+    # gen_t can be a bfloat16 decoder output under bf16-mixed precision;
+    # numpy has no bfloat16 support, so cast to float32 first.
+    gen_t = gen_t.float().cpu().data.numpy()
     gen_t = np.argmax(gen_t, axis=-1)
     decoded_samples = []
     for i in range(len(gen_t)):
