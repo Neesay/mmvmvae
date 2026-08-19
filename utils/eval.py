@@ -7,6 +7,27 @@ from sklearn.metrics import average_precision_score
 
 import torch
 
+# PyTorch >= 2.6 flips torch.load's default to weights_only=True. The
+# pretrained classifier checkpoints loaded below (ClfPolyMNIST/ClfCelebA/
+# ClfscMNC) were all saved via LightningModule.save_hyperparameters(cfg),
+# which pickles the whole Hydra cfg -- an omegaconf.DictConfig -- into the
+# checkpoint. DictConfig isn't in torch's default weights_only-safe allowlist,
+# so loading fails on newer torch even though this repo pins torch==2.2.0
+# (where weights_only defaulted to False). pytorch_lightning==2.1.4's own
+# checkpoint loader doesn't expose a weights_only kwarg through the public
+# load_from_checkpoint API, so we patch the default here instead. Safe as
+# long as the checkpoints being loaded are ones you trust (here: your own
+# training runs), matching option (1) in torch's own error message.
+_torch_load = torch.load
+
+
+def _torch_load_full(*args, **kwargs):
+    kwargs.setdefault("weights_only", False)
+    return _torch_load(*args, **kwargs)
+
+
+torch.load = _torch_load_full
+
 from clfs.polymnist_clf import ClfPolyMNIST
 from clfs.celeba_clf import ClfCelebA
 from clfs.scMNC_clf import ClfscMNC
