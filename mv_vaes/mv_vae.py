@@ -725,10 +725,9 @@ class MVVAE(pl.LightningModule):
                 elif key == "text":
                     continue
                 imgs_grid_m = make_grid(random_gen_m, nrow=n_samples_row)
-                # random_gen_m is a pure decoder output (no float32 ground
-                # truth mixed in to force promotion) -- bfloat16 under
-                # bf16-mixed precision, which to_pil_image()'s numpy path
-                # can't handle directly.
+                # on_validation_epoch_end runs outside autocast, so z and this
+                # decoder output are already float32; .float() here is just a
+                # defensive no-op guard against that changing later.
                 imgs_grid_m = t_f.to_pil_image(imgs_grid_m.float())
                 self.logger.log_image(
                     key="random generations " + key,
@@ -740,8 +739,14 @@ class MVVAE(pl.LightningModule):
             # and generate the remaining modalities
             for m, key in enumerate(self.modality_names):
                 mod_m = self.last_val_batch[0][key][-n_samples_plot:]
-                mu_m_val = enc_mu_enc_val[key][-n_samples_plot:]
-                lv_m_val = enc_lv_enc_val[key][-n_samples_plot:]
+                # on_validation_epoch_end runs outside Lightning's bf16-mixed
+                # autocast context (unlike validation_step, where these mu/lv
+                # were originally produced), but decoder weights are always
+                # float32 -- so a stored bfloat16 mu/lv fed straight into a
+                # decoder here would hit "mat1 and mat2 must have the same
+                # dtype". Cast back to float32 at this boundary.
+                mu_m_val = enc_mu_enc_val[key][-n_samples_plot:].float()
+                lv_m_val = enc_lv_enc_val[key][-n_samples_plot:].float()
                 dist_m = [mu_m_val, lv_m_val]
                 mod_gen_m = conditional_generation(self, [dist_m])[0]
                 mod_gen_m_cov = conditional_generation_cov(self, [dist_m])[0]
