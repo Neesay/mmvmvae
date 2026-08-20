@@ -11,6 +11,13 @@ class DataConfig:
     num_workers: int = 8
     # num views
     num_views: int = MISSING
+    # Preload the decoded dataset into RAM once (as uint8) instead of
+    # re-decoding every PNG on every epoch. Currently honoured by PolyMNIST
+    # only; scMNC already holds its data in memory, and CelebA would need its
+    # own implementation. Val is cached by default (~118 MB for 10k samples);
+    # train is opt-in because it is 6x larger (~705 MB for 60k samples).
+    cache_val: bool = True
+    cache_train: bool = False
 
 
 @dataclass

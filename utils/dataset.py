@@ -55,17 +55,24 @@ def get_dataset_PM(cfg):
         cfg.dataset.dir_data_base, cfg.dataset.suffix_data_train
     )
     train_dst = PolyMNIST(dir_data_train, cfg.dataset.num_views,
-                          cfg.dataset.modalities_order, transform=transform)
+                          cfg.dataset.modalities_order, transform=transform,
+                          cache=cfg.dataset.cache_train)
     dir_data_test = os.path.join(
         cfg.dataset.dir_data_base, cfg.dataset.suffix_data_test
     )
-    val_dst = PolyMNIST(dir_data_test, cfg.dataset.num_views, 
-                        cfg.dataset.modalities_order, transform=transform)
+    val_dst = PolyMNIST(dir_data_test, cfg.dataset.num_views,
+                        cfg.dataset.modalities_order, transform=transform,
+                        cache=cfg.dataset.cache_val)
+    # A cached split has no decode work left in __getitem__, so worker
+    # processes would only add per-epoch spawn + IPC overhead for what is now
+    # an in-RAM tensor index. Load it on the main process instead.
+    train_workers = 0 if cfg.dataset.cache_train else cfg.dataset.num_workers
+    val_workers = 0 if cfg.dataset.cache_val else cfg.dataset.num_workers
     train_loader = torch.utils.data.DataLoader(
         train_dst,
         batch_size=cfg.model.batch_size,
         shuffle=True,
-        num_workers=cfg.dataset.num_workers,
+        num_workers=train_workers,
         drop_last=True,
         pin_memory=True,
     )
@@ -73,7 +80,7 @@ def get_dataset_PM(cfg):
         val_dst,
         batch_size=cfg.model.batch_size_eval,
         shuffle=False,
-        num_workers=cfg.dataset.num_workers,
+        num_workers=val_workers,
         drop_last=True,
         pin_memory=True,
     )

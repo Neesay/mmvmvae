@@ -15,13 +15,18 @@ from PIL import Image
 class PolyMNIST(Dataset):
     """Multimodal MNIST Dataset."""
 
-    def __init__(self, dir_data, num_views, mod_order, transform=None, target_transform=None):
+    def __init__(self, dir_data, num_views, mod_order, transform=None, target_transform=None,
+                 cache=False):
         """
         Args:
             unimodal_datapaths (list): list of paths to weakly-supervised unimodal datasets with samples that
                 correspond by index. Therefore the numbers of samples of all datapaths should match.
             transform: tranforms on colored MNIST digits.
             target_transform: transforms on labels.
+            cache: preload every view into RAM as a uint8 tensor at construction
+                time, so __getitem__ never touches the filesystem or the PNG
+                decoder again. Costs ~12 kB/sample (num_views * 3 * 28 * 28),
+                i.e. ~118 MB for the 10k-sample test split.
         """
         super().__init__()
         self.num_modalities = num_views
@@ -31,19 +36,62 @@ class PolyMNIST(Dataset):
         self.label_names = "digit"
         mod_list = [n for n in range(num_views)]
         mod_list.remove(mod_order)
-        self.modalities_order = [mod_order] + mod_list 
+        self.modalities_order = [mod_order] + mod_list
 
         # save all paths to individual files
+        # sorted(): glob returns entries in arbitrary filesystem order, which is
+        # not guaranteed to agree between the m0/, m1/, ... directories even
+        # though they contain identically-named files. __getitem__ pairs the
+        # views purely by list position and reports a single shared label, so an
+        # order mismatch would silently pair a "3" in one view with a "7" in
+        # another. The filenames are identical across modality dirs, so sorting
+        # lines them up by construction (and makes sample order reproducible).
         self.file_paths = {dp: [] for dp in range(self.num_modalities)}
         for dp in range(self.num_modalities):
-            files = glob.glob(os.path.join(self.dir_data, "m" + str(dp), "*.png"))
+            files = sorted(
+                glob.glob(os.path.join(self.dir_data, "m" + str(dp), "*.png"))
+            )
             self.file_paths[dp] = files
         # assert that each modality has the same number of images
         num_files = len(self.file_paths[dp])
         for files in self.file_paths.values():
-            print(num_files, len(files))
             assert len(files) == num_files
         self.num_files = num_files
+
+        # Labels are encoded in the filename ("<index>.<digit>.png") and are
+        # shared across views, so parse them once here rather than splitting 5
+        # strings on every __getitem__ call (4 of which were then discarded).
+        self.labels = [
+            int(os.path.basename(fp).split(".")[-2]) for fp in self.file_paths[0]
+        ]
+        # cheap guard that the sorted pairing really does line the views up
+        for dp in range(1, self.num_modalities):
+            for i, fp in enumerate(self.file_paths[dp]):
+                if int(os.path.basename(fp).split(".")[-2]) != self.labels[i]:
+                    raise RuntimeError(
+                        f"view m{dp} in {self.dir_data} disagrees with m0 on the label "
+                        f"at index {i}; the views are misaligned"
+                    )
+
+        self.cache = None
+        if cache:
+            self._build_cache()
+
+    def _build_cache(self):
+        """Decode every PNG once into a (views, samples, 3, 28, 28) uint8 tensor."""
+        cache = torch.empty(
+            (self.num_modalities, self.num_files, 3, 28, 28), dtype=torch.uint8
+        )
+        for dp in range(self.num_modalities):
+            for i, fp in enumerate(self.file_paths[dp]):
+                with Image.open(fp) as img:
+                    arr = np.asarray(img.convert("RGB"), dtype=np.uint8)  # HWC
+                cache[dp, i] = torch.from_numpy(arr).permute(2, 0, 1)
+        self.cache = cache
+        print(
+            f"cached {self.num_files} samples x {self.num_modalities} views from "
+            f"{self.dir_data} ({cache.numel() / 1e6:.0f} MB uint8)"
+        )
 
     @staticmethod
     def _create_mmnist_dataset(
@@ -185,22 +233,31 @@ class PolyMNIST(Dataset):
         Returns a tuple (images, labels) where each element is a list of
         length `self.num_modalities`.
         """
+        if self.cache is not None:
+            # The cache holds exactly what ToTensor() produces apart from the
+            # final uint8 -> float scaling (kept as uint8 to cut cache memory
+            # 4x), so dividing by 255 here reproduces ToTensor() exactly.
+            # uint8 / float promotes to a *new* float32 tensor, so this can
+            # never alias (and therefore never corrupt) the cache itself.
+            images_dict = {
+                "m%d" % m: self.cache[m, index] / 255.0
+                for m in range(self.num_modalities)
+            }
+            return images_dict, self.labels[index]
+
         files = [self.file_paths[dp][index] for dp in range(self.num_modalities)]
-        labels = [int(files[m].split(".")[-2]) for m in range(self.num_modalities)]
         images = [Image.open(files[m]) for m in range(self.num_modalities)]
 
         # transforms
         if self.transform:
             images = [self.transform(img) for img in images]
-        if self.target_transform:
-            labels = [self.transform(label) for label in labels]
 
         images_dict = {"m%d" % m: images[m] for m in range(self.num_modalities)}
         # images_dict = {"m%d" % m: images[m] for m in self.modalities_order}
-        
+
         return (
             images_dict,
-            labels[0],
+            self.labels[index],
         )  # NOTE: for MMNIST, labels are shared across modalities, so can take one value
 
     def __len__(self):
