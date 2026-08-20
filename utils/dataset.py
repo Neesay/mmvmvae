@@ -9,6 +9,18 @@ from utils.CelebADataset import CelebADataset
 from utils.scMNCDataset import scMNC
 from utils.scMNCDataset import full_dataset_scMNC
 
+# All DataLoaders here now use persistent_workers=True (workers live for the
+# whole run instead of being respawned every epoch), and PyTorch's default
+# 'file_descriptor' multiprocessing sharing strategy leaks a few fds per
+# batch that only get reclaimed when a worker exits. Over a full run
+# (hundreds of epochs x hundreds of batches) that leak eventually exhausts
+# ulimit -n, and new tensor-IPC fd allocations then just block forever --
+# training stalls at 0% GPU with no error. 'file_system' shares tensors via
+# /dev/shm instead of fds, which avoids that leak entirely. This used to only
+# be set for the scMNC loader; with persistent_workers on for every dataset,
+# all of them need it now.
+torch.multiprocessing.set_sharing_strategy('file_system')
+
 transform = transforms.Compose([transforms.ToTensor()])
 
 
@@ -75,8 +87,8 @@ def get_dataset_PM(cfg):
 def get_dataset_sc(cfg):
     train_dst = scMNC(cfg.dataset.dir_data, cfg.model.seed, train=True)
     eval_dst = scMNC(cfg.dataset.dir_data, cfg.model.seed, train=False)
-    torch.multiprocessing.set_sharing_strategy('file_system')
-    
+    # sharing strategy is now set once at module import time, above
+
     train_loader = torch.utils.data.DataLoader(
         train_dst,
         batch_size=cfg.model.batch_size,
