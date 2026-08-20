@@ -85,7 +85,10 @@ class PolyMNIST(Dataset):
         for dp in range(self.num_modalities):
             for i, fp in enumerate(self.file_paths[dp]):
                 with Image.open(fp) as img:
-                    arr = np.asarray(img.convert("RGB"), dtype=np.uint8)  # HWC
+                    # np.array (not asarray) so the buffer is writable: asarray
+                    # aliases PIL's read-only buffer, which makes
+                    # torch.from_numpy warn about non-writable tensors.
+                    arr = np.array(img.convert("RGB"), dtype=np.uint8)  # HWC
                 cache[dp, i] = torch.from_numpy(arr).permute(2, 0, 1)
         self.cache = cache
         print(
