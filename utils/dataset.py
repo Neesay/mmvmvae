@@ -9,16 +9,13 @@ from utils.CelebADataset import CelebADataset
 from utils.scMNCDataset import scMNC
 from utils.scMNCDataset import full_dataset_scMNC
 
-# All DataLoaders here now use persistent_workers=True (workers live for the
-# whole run instead of being respawned every epoch), and PyTorch's default
-# 'file_descriptor' multiprocessing sharing strategy leaks a few fds per
-# batch that only get reclaimed when a worker exits. Over a full run
-# (hundreds of epochs x hundreds of batches) that leak eventually exhausts
-# ulimit -n, and new tensor-IPC fd allocations then just block forever --
-# training stalls at 0% GPU with no error. 'file_system' shares tensors via
-# /dev/shm instead of fds, which avoids that leak entirely. This used to only
-# be set for the scMNC loader; with persistent_workers on for every dataset,
-# all of them need it now.
+# PyTorch's default 'file_descriptor' multiprocessing sharing strategy leaks
+# a few fds per batch that only get reclaimed when a DataLoader worker exits;
+# over a long run that can exhaust ulimit -n and silently deadlock training
+# (0% GPU, no error, no progress) once new tensor-IPC fd allocations start
+# blocking. 'file_system' shares tensors via /dev/shm instead, avoiding that
+# leak. This used to only be set for the scMNC loader; applying it for every
+# dataset here is cheap, harmless insurance regardless of worker lifetime.
 torch.multiprocessing.set_sharing_strategy('file_system')
 
 transform = transforms.Compose([transforms.ToTensor()])
@@ -71,7 +68,6 @@ def get_dataset_PM(cfg):
         num_workers=cfg.dataset.num_workers,
         drop_last=True,
         pin_memory=True,
-        persistent_workers=cfg.dataset.num_workers > 0,
     )
     val_loader = torch.utils.data.DataLoader(
         val_dst,
@@ -80,7 +76,6 @@ def get_dataset_PM(cfg):
         num_workers=cfg.dataset.num_workers,
         drop_last=True,
         pin_memory=True,
-        persistent_workers=cfg.dataset.num_workers > 0,
     )
     return train_loader, train_dst, val_loader, val_dst
 
@@ -96,7 +91,6 @@ def get_dataset_sc(cfg):
         num_workers=cfg.dataset.num_workers,
         drop_last=True,
         pin_memory=True,
-        persistent_workers=cfg.dataset.num_workers > 0,
     )
     val_loader = torch.utils.data.DataLoader(
         eval_dst,
@@ -105,7 +99,6 @@ def get_dataset_sc(cfg):
         num_workers=cfg.dataset.num_workers,
         drop_last=True,
         pin_memory=True,
-        persistent_workers=cfg.dataset.num_workers > 0,
     )
     return train_loader, train_dst, val_loader, eval_dst
 
@@ -125,7 +118,6 @@ def get_dataset_celeba(cfg):
         num_workers=cfg.dataset.num_workers,
         drop_last=True,
         pin_memory=True,
-        persistent_workers=cfg.dataset.num_workers > 0,
     )
     val_loader = torch.utils.data.DataLoader(
         d_eval,
@@ -134,7 +126,6 @@ def get_dataset_celeba(cfg):
         num_workers=cfg.dataset.num_workers,
         drop_last=True,
         pin_memory=True,
-        persistent_workers=cfg.dataset.num_workers > 0,
     )
     return train_loader, d_train, val_loader, d_eval
 
