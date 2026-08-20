@@ -22,7 +22,7 @@ from utils.eval import from_preds_to_acc
 from utils.eval import from_preds_to_ap
 
 from utils.text import create_txt_image
-from utils.fid import FrechetInceptionDistance
+from utils.fid import FrechetInceptionDistance, NoTrainInceptionV3
 from utils.vae import get_networks
 
 
@@ -104,6 +104,16 @@ class MVVAE(pl.LightningModule):
                 v2.ToDtype(torch.uint8, scale=True),
             ]
         )
+        # Plain dicts on purpose: nn.Module.__setattr__ auto-registers any
+        # Module assigned directly to an attribute, which would pull the
+        # frozen InceptionV3 backbone and the pretrained coherence classifiers
+        # into self.parameters() (so the optimizer would train them), into
+        # every checkpoint, and into the model summary. Holding them inside a
+        # dict keeps them out of the module tree, matching how self.fid_scores
+        # already worked.
+        self._fid_shared = {}
+        self.fid_scores = {}
+        self._coherence_clf_cache = {}
         self.initialize_fid_scores()
         
         if cfg.model.schedule == "cyclical":
@@ -212,20 +222,54 @@ class MVVAE(pl.LightningModule):
             )
         return self.cfg.model.final_beta_value
 
+    def _get_shared_inception(self):
+        """One InceptionV3 backbone shared by every FID metric.
+
+        Constructing FrechetInceptionDistance with an int `feature` builds its
+        own InceptionV3 and loads the weights file from disk. PolyMNIST needs
+        num_views^2 * 2 = 50 of these metrics, so the default path put 50
+        identical ~25M-parameter networks on the GPU (~5 GB) and did 50 disk
+        loads. The metric also accepts a pre-built Module, so build one and
+        hand the same instance to all of them: identical weights, identical
+        features, one copy.
+        """
+        inception = self._fid_shared.get("inception")
+        if inception is None:
+            inception = NoTrainInceptionV3(
+                name="inception-v3-compat",
+                features_list=["2048"],
+                feature_extractor_weights_path=self.cfg.eval.path_inception_weights,
+            )
+            # Lets FrechetInceptionDistance size its buffers directly instead of
+            # running a probe forward pass to discover the feature width. That
+            # probe builds its dummy tensor on the CPU, so it would also fail
+            # outright once this backbone has been moved to the GPU.
+            inception.num_features = 2048
+            self._fid_shared["inception"] = inception
+        return inception
+
     def initialize_fid_scores(self):
-        self.fid_scores = {}
+        # Called once at construction and again at the start of every
+        # FID-logging epoch. Rebuilding the metrics each time meant re-loading
+        # InceptionV3 50x per FID epoch; the metrics are stateless apart from
+        # their accumulated features, so reset() gives the same clean slate.
+        if self.fid_scores:
+            for fid in self.fid_scores.values():
+                fid.reset()
+            return
+        inception = self._get_shared_inception()
         for key in self.modality_names:
             for key_tilde in self.modality_names:
                 if key_tilde in ("text", "exp", "feat"):
                     continue
                 self.fid_scores[key + "_to_" + key_tilde] = FrechetInceptionDistance(
+                    feature=inception,
                     compute_on_cpu=True,
-                    path_inception_weights=self.cfg.eval.path_inception_weights,
                 ).to(self.cfg.model.device)
                 # storage of results using covariance matrix
                 self.fid_scores[key + "_to_" + key_tilde + "_cov"] = FrechetInceptionDistance(
+                    feature=inception,
                     compute_on_cpu=True,
-                    path_inception_weights=self.cfg.eval.path_inception_weights,
                 ).to(self.cfg.model.device)
 
     def training_step(self, batch, batch_idx):
@@ -354,12 +398,29 @@ class MVVAE(pl.LightningModule):
         self.log_additional_values(out)
         return loss
 
+    def _get_coherence_clfs(self):
+        """Pretrained coherence classifiers, loaded once per process.
+
+        evaluate_conditional_generation runs per validation *batch*, and used
+        to call load_modality_clfs() every time -- re-reading the checkpoint
+        from disk and rebuilding the classifier ~156x per validation epoch.
+        The weights are identical every time, so load once and hold on to it.
+        """
+        clfs = self._coherence_clf_cache.get("clfs")
+        if clfs is None:
+            clfs = load_modality_clfs(self.cfg)
+            clfs.eval()
+            for param in clfs.parameters():
+                param.requires_grad_(False)
+            self._coherence_clf_cache["clfs"] = clfs
+        return clfs
+
     def evaluate_conditional_generation(self, out, batch):
         dists_enc_out = out[2]
         labels = batch[1]
         data = batch[0]
         n_views = self.cfg.dataset.num_views
-        clfs_coherence = load_modality_clfs(self.cfg)
+        clfs_coherence = self._get_coherence_clfs()
 
         preds = torch.zeros(
             (
