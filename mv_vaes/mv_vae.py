@@ -289,17 +289,33 @@ class MVVAE(pl.LightningModule):
       
       
     def _cov_needed_this_epoch(self):
-        # self.covariance/self.mu are only consumed by cond_generate_samples_cov,
-        # which is only exercised by the coherence-with-covariance and
-        # FID-with-covariance evaluation paths in validation_step. Recomputing
-        # the full-dataset covariance is a second full pass over the encoders,
-        # so only pay for it on epochs where one of those paths will actually run.
-        next_epoch = self.current_epoch + 1
-        need_coh = self.cfg.eval.coherence and (
-            next_epoch % self.cfg.log.coherence_logging_frequency == 0
+        """Whether the empirical covariance/mu are about to be needed.
+
+        Recomputing them is a second full pass over the training set through
+        the encoders, so it is worth skipping on epochs where nothing reads
+        them. Three validation branches consume them via
+        cond_generate_samples_cov: coherence, FID, and the conditional-
+        generation image grids (conditional_generation_cov), each behind its
+        own logging frequency.
+
+        The offsets: this hook fires adjacent to the validation loop, and
+        which side it lands on -- and therefore whether the estimate produced
+        here serves this epoch's validation or the next one's -- depends on
+        the Lightning version's epoch-loop ordering. Rather than depend on
+        that, cover both. At the default frequency of 50 this still skips
+        ~96% of epochs, and it can never leave a stale estimate in place.
+        """
+        freqs = [
+            self.cfg.log.fid_logging_frequency,
+            self.cfg.log.img_plotting_frequency,
+        ]
+        if self.cfg.eval.coherence:
+            freqs.append(self.cfg.log.coherence_logging_frequency)
+        return any(
+            (self.current_epoch + offset) % freq == 0
+            for freq in freqs
+            for offset in (1, 2)
         )
-        need_fid = next_epoch % self.cfg.log.fid_logging_frequency == 0
-        return need_coh or need_fid
 
     def on_train_epoch_end(self):
         if not self._cov_needed_this_epoch():
