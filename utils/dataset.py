@@ -63,10 +63,18 @@ def get_dataset_PM(cfg):
     val_dst = PolyMNIST(dir_data_test, cfg.dataset.num_views,
                         cfg.dataset.modalities_order, transform=transform,
                         cache=cfg.dataset.cache_val)
-    # A cached split has no decode work left in __getitem__, so worker
-    # processes would only add per-epoch spawn + IPC overhead for what is now
-    # an in-RAM tensor index. Load it on the main process instead.
-    train_workers = 0 if cfg.dataset.cache_train else cfg.dataset.num_workers
+    # Caching removes the PNG decode, but NOT the per-batch cost of slicing
+    # batch_size * num_views tensors out of the cache, converting them to
+    # float, and collating them into the batch dict. That is still tens of ms
+    # of CPU work per batch, and with num_workers=0 it runs serially with GPU
+    # compute instead of being prefetched -- which starves the GPU.
+    #
+    # So: keep workers on the training loader regardless of caching (the cache
+    # tensor is inherited by fork copy-on-write, so it is shared, not copied
+    # per worker). The validation loader is small and only runs every
+    # log.val_freq epochs, so there the per-epoch worker spawn cost outweighs
+    # the overlap and num_workers=0 genuinely wins.
+    train_workers = cfg.dataset.num_workers
     val_workers = 0 if cfg.dataset.cache_val else cfg.dataset.num_workers
     train_loader = torch.utils.data.DataLoader(
         train_dst,
