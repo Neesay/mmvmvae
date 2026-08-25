@@ -575,12 +575,29 @@ class MVVAE(pl.LightningModule):
                 self.fid_scores[key + "_to_" + key_tilde + "_cov"]
 
     def on_validation_epoch_end(self):
+        # Lightning runs a sanity-check validation pass before training starts.
+        # Those steps append to validation_step_outputs, but the early return
+        # below (training_step_outputs is empty, since no training has run yet)
+        # skips the .clear() at the end of this method, so the sanity-check
+        # entries survive into the first real validation epoch.
+        #
+        # What that corrupts depends on the logging frequencies. At
+        # coherence_logging_frequency=1 the sanity pass computes real coherence
+        # tensors, which then get silently double-counted. At the default of 50
+        # it stores None instead, and the first real validation epoch dies in
+        # torch.cat([None, None, tensor, ...]). Drop the buffers on every path
+        # that doesn't consume them.
+        if self.trainer.sanity_checking:
+            self.validation_step_outputs.clear()
+            self.training_step_outputs.clear()
+            return
         enc_mu_out_train = {key: [] for key in self.modality_names}
         enc_mu_enc_train = {key: [] for key in self.modality_names}
         labels_train = []
         if len(self.training_step_outputs) == 0:
+            self.validation_step_outputs.clear()
             return
-        
+
         for _, train_out in enumerate(self.training_step_outputs):
             out, batch = train_out
             data, labels = batch
